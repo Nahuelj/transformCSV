@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Transformador de Mesa de Corte</title>
+    <style>
+      body {
+        font-family: sans-serif;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        height: 100vh;
+        background-color: #f0f2f5;
+        margin: 0;
+      }
+      .card {
+        background: white;
+        padding: 40px;
+        border-radius: 12px;
+        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+        text-align: center;
+        width: 400px;
+      }
+      h1 {
+        color: #333;
+        font-size: 24px;
+        margin-bottom: 10px;
+      }
+      p {
+        color: #666;
+        font-size: 14px;
+        margin-bottom: 30px;
+      }
+      .drop-zone {
+        border: 2px dashed #ccc;
+        padding: 40px;
+        border-radius: 8px;
+        cursor: pointer;
+        transition: 0.3s;
+        background: #fafafa;
+      }
+      .drop-zone:hover {
+        border-color: #2196f3;
+        background: #e3f2fd;
+      }
+      #status {
+        margin-top: 20px;
+        font-weight: bold;
+        color: #2196f3;
+        min-height: 24px;
+      }
+      button {
+        background-color: #4caf50;
+        color: white;
+        border: none;
+        padding: 10px 20px;
+        border-radius: 5px;
+        cursor: pointer;
+        font-size: 16px;
+        margin-top: 20px;
+        display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <h1>Transformador Diario</h1>
+      <p>Sube tu archivo "Mesa de corte" (.csv)</p>
+
+      <div
+        class="drop-zone"
+        id="dropZone"
+        onclick="document.getElementById('fileInput').click()"
+      >
+        <span id="dropText"
+          >Arrastra tu archivo aquí<br />o haz clic para buscar</span
+        >
+        <input type="file" id="fileInput" accept=".csv" style="display: none" />
+      </div>
+
+      <div id="status"></div>
+    </div>
+
+    <script>
+      const dropZone = document.getElementById('dropZone');
+      const fileInput = document.getElementById('fileInput');
+      const status = document.getElementById('status');
+
+      dropZone.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        dropZone.style.borderColor = '#2196F3';
+      });
+      dropZone.addEventListener('dragleave', (e) => {
+        e.preventDefault();
+        dropZone.style.borderColor = '#ccc';
+      });
+      dropZone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        dropZone.style.borderColor = '#ccc';
+        handleFile(e.dataTransfer.files[0]);
+      });
+
+      fileInput.addEventListener('change', (e) =>
+        handleFile(e.target.files[0])
+      );
+
+      function handleFile(file) {
+        if (!file) return;
+        status.textContent = 'Procesando...';
+
+        const reader = new FileReader();
+        reader.onload = function (e) {
+          const text = e.target.result;
+          try {
+            const csvData = transformData(text);
+            downloadCSV(csvData, 'Para_Pegar_En_Total.csv');
+            status.textContent = '¡Listo! Archivo descargado.';
+            status.style.color = 'green';
+          } catch (err) {
+            console.error(err);
+            status.textContent = 'Error: El formato del archivo no coincide.';
+            status.style.color = 'red';
+          }
+        };
+        reader.readAsText(file);
+      }
+
+      function transformData(csvText) {
+        const delimiter = csvText.indexOf(';') > -1 ? ';' : ',';
+        const lines = csvText.split(/\r\n|\n/);
+        const normalizeValue = (value) =>
+          value
+            .toLowerCase()
+            .normalize('NFD')
+            .replace(/[\u0300-\u036f]/g, '');
+
+        let headerIndex = -1;
+        let headerRow = [];
+
+        for (let i = 0; i < lines.length; i++) {
+          const line = lines[i];
+          if (!line.trim()) continue;
+
+          const cells = line.split(delimiter).map((cell) => cell.trim());
+          if (cells.length < 4) continue;
+
+          const operatorCandidates = cells
+            .slice(3)
+            .filter((cell) => cell && /[a-zA-Z]/.test(cell));
+
+          if (operatorCandidates.length) {
+            headerIndex = i;
+            headerRow = cells;
+            break;
+          }
+        }
+
+        if (headerIndex === -1) throw new Error('No encontré los encabezados');
+
+        const operators = [];
+        for (let i = 3; i < headerRow.length; i++) {
+          const name = headerRow[i]?.trim();
+          if (!name || /total/i.test(name)) continue;
+          operators.push({ name, index: i });
+        }
+
+        if (!operators.length) throw new Error('No encontré los operadores');
+
+        const output = ['Fecha,Línea,Operador,Cantidad'];
+        let lastDate = '';
+        let lastLine = '';
+
+        for (let i = headerIndex + 1; i < lines.length; i++) {
+          const line = lines[i];
+          if (!line.trim()) continue;
+
+          const cells = line.split(delimiter).map((cell) => cell.trim());
+          if (cells.length < 3) continue;
+
+          const dateCell = cells[1] || '';
+          const lineCell = cells[2] || '';
+          const normalizedLine = normalizeValue(lineCell);
+          const normalizedDate = normalizeValue(dateCell);
+
+          if (normalizedLine.includes('total') || normalizedDate.includes('total')) {
+            continue;
+          }
+
+          const currentDate = dateCell || lastDate;
+          if (!currentDate) continue;
+          lastDate = currentDate;
+
+          const currentLine = lineCell || lastLine;
+          if (!currentLine) continue;
+          lastLine = currentLine;
+
+          operators.forEach((operator) => {
+            const value = cells[operator.index] || '';
+            output.push(
+              `${currentDate},${currentLine},${operator.name},${value}`
+            );
+          });
+        }
+
+        return output.join('\n');
+      }
+
+      function downloadCSV(csvContent, fileName) {
+        const blob = new Blob([csvContent], {
+          type: 'text/csv;charset=utf-8;',
+        });
+        const link = document.createElement('a');
+        const url = URL.createObjectURL(blob);
+        link.setAttribute('href', url);
+        link.setAttribute('download', fileName);
+        link.style.visibility = 'hidden';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+      }
+    </script>
+  </body>
+</html>
